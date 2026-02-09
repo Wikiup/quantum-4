@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Quantum 4 — Decision Randomizer</title>
+    <meta name="description" content="Physics-based D4 Dice and Spinner. Spin the wheel or roll the dice to get a number from 1-4.">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #050505;
+            color: #fff;
+            font-family: 'Orbitron', sans-serif;
+            overflow: hidden;
+            touch-action: none;
+        }
+        .glow {
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5), 0 0 20px rgba(0, 255, 255, 0.3);
+        }
+        .mode-btn {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s ease;
+        }
+        .mode-btn.active {
+            background: rgba(0, 255, 255, 0.15);
+            border-color: #00ffff;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.3);
+        }
+        #result-display {
+            opacity: 0;
+            transform: scale(0.5);
+            transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        #result-display.show {
+            opacity: 1;
+            transform: scale(1);
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen">
+
+    <!-- Header / Mode Switcher -->
+    <header class="p-6 flex justify-between items-center z-10 absolute top-0 w-full">
+        <h1 class="text-xl font-bold tracking-widest text-gray-400">QUANTUM<span class="text-cyan-400">4</span></h1>
+        
+        <div class="flex gap-2">
+            <button id="mode-spinner" class="mode-btn active px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide">Spinner</button>
+            <button id="mode-dice" class="mode-btn px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide">D4 Dice</button>
+        </div>
+    </header>
+
+    <!-- Main Canvas Area -->
+    <main class="flex-1 relative flex items-center justify-center">
+        <canvas id="gameCanvas"></canvas>
+        
+        <!-- Center Action Button (Invisible overlay for tap) -->
+        <div id="tap-zone" class="absolute inset-0 z-0"></div>
+
+        <!-- Result Overlay -->
+        <div id="result-display" class="absolute pointer-events-none flex flex-col items-center justify-center z-20">
+            <div class="text-6xl font-black text-white glow" id="result-value">1</div>
+        </div>
+        
+        <!-- Instruction -->
+        <div id="instruction" class="absolute bottom-20 text-gray-500 text-sm animate-pulse pointer-events-none z-10">
+            TAP TO SPIN
+        </div>
+    </main>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const resultDisplay = document.getElementById('result-display');
+        const resultValue = document.getElementById('result-value');
+        const instruction = document.getElementById('instruction');
+        const tapZone = document.getElementById('tap-zone');
+        
+        // State
+        let mode = 'spinner'; // 'spinner' | 'dice'
+        let width, height, centerX, centerY;
+        let isAnimating = false;
+        
+        // Spinner State
+        let angle = 0;
+        let velocity = 0;
+        let friction = 0.985;
+        const sectors = [1, 2, 3, 4]; // 1=Top-Right, 2=Bottom-Right, 3=Bottom-Left, 4=Top-Left (Clockwise from top?)
+        // Let's map angles properly. 0 is Right. 
+        // 0-90: 1, 90-180: 2, 180-270: 3, 270-360: 4
+        const colors = ['#ef4444', '#3b82f6', '#22c55e', '#f59e0b']; // Red, Blue, Green, Yellow
+
+        // Dice State (Pseudo-3D Tetrahedron)
+        let diceAngle = 0;
+        let diceScale = 1;
+        
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            centerX = width / 2;
+            centerY = height / 2;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // ----------------------------------------------------------------
+        // Physics Loop
+        // ----------------------------------------------------------------
+        function loop() {
+            ctx.clearRect(0, 0, width, height);
+
+            if (mode === 'spinner') {
+                drawSpinner();
+            } else {
+                drawDice();
+            }
+            
+            requestAnimationFrame(loop);
+        }
+        loop();
+
+        // ----------------------------------------------------------------
+        // Spinner Logic
+        // ----------------------------------------------------------------
+        function drawSpinner() {
+            // Physics
+            if (isAnimating) {
+                angle += velocity;
+                velocity *= friction;
+                
+                // Stop condition
+                if (Math.abs(velocity) < 0.002) {
+                    velocity = 0;
+                    isAnimating = false;
+                    showResult(getSpinnerResult());
+                    instruction.style.opacity = 1;
+                    instruction.textContent = "TAP TO SPIN AGAIN";
+                }
+            }
+
+            // Draw Wheel
+            const radius = Math.min(width, height) * 0.35;
+            
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate(angle);
+
+            // Sectors
+            const arc = (Math.PI * 2) / 4;
+            for (let i = 0; i < 4; i++) {
+                ctx.beginPath();
+                ctx.fillStyle = colors[i];
+                ctx.moveTo(0, 0);
+                ctx.arc(0, 0, radius, i * arc, (i + 1) * arc);
+                ctx.fill();
+                
+                // Labels
+                ctx.save();
+                ctx.rotate(i * arc + arc / 2);
+                ctx.translate(radius * 0.6, 0);
+                ctx.rotate(Math.PI / 2); // Orient text
+                ctx.fillStyle = 'rgba(0,0,0,0.5)';
+                ctx.font = 'bold 40px Orbitron';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(i + 1, 0, 0);
+                ctx.restore();
+            }
+            ctx.restore();
+
+            // Draw Pointer (Fixed at top)
+            ctx.beginPath();
+            ctx.fillStyle = '#fff';
+            ctx.moveTo(centerX, centerY - radius - 20);
+            ctx.lineTo(centerX - 15, centerY - radius + 10);
+            ctx.lineTo(centerX + 15, centerY - radius + 10);
+            ctx.fill();
+            
+            // Draw Center Cap
+            ctx.beginPath();
+            ctx.fillStyle = '#111';
+            ctx.arc(centerX, centerY, 20, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function getSpinnerResult() {
+            // Pointer is at -90 deg (Top) relative to center.
+            // Wheel rotation `angle` shifts the sectors.
+            // We need to normalize angle to 0-2PI
+            let normAngle = angle % (Math.PI * 2);
+            if (normAngle < 0) normAngle += Math.PI * 2;
+            
+            // The pointer is at 270 degrees (3*PI/2) in canvas space (0 is right).
+            // Or simpler: Transform pointer angle into wheel space.
+            // Wheel rotates CW. Pointer is static.
+            // Effectively, we check which sector is at -PI/2.
+            
+            // Let's just use raw math.
+            // Total rotation: angle.
+            // Pointer is at -PI/2 (top).
+            // Relative angle = (-PI/2 - angle) normalized.
+            
+            let rel = (-Math.PI / 2 - angle) % (Math.PI * 2);
+            if (rel < 0) rel += Math.PI * 2;
+            
+            const quadrant = Math.floor(rel / (Math.PI / 2));
+            // Quadrant 0 = Sector 1 (1)
+            // Quadrant 1 = Sector 2 (2)
+            // Quadrant 2 = Sector 3 (3)
+            // Quadrant 3 = Sector 4 (4)
+            return quadrant + 1;
+        }
+
+        // ----------------------------------------------------------------
+        // Dice Logic (2D Simulation of 3D)
+        // ----------------------------------------------------------------
+        function drawDice() {
+             if (isAnimating) {
+                // Tumble
+                diceAngle += velocity;
+                // Scale pulse for "3D" effect
+                diceScale = 1 + Math.sin(diceAngle * 3) * 0.2;
+                
+                velocity *= friction; // reuse spinner friction logic
+                
+                if (Math.abs(velocity) < 0.01) {
+                    velocity = 0;
+                    isAnimating = false;
+                    showResult(Math.floor(Math.random() * 4) + 1); // True random for dice
+                    instruction.style.opacity = 1;
+                    instruction.textContent = "TAP TO ROLL AGAIN";
+                }
+            }
+            
+            const size = Math.min(width, height) * 0.2 * diceScale;
+            
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate(diceAngle);
+            
+            // Draw Triangle (Tetrahedron face)
+            ctx.beginPath();
+            ctx.fillStyle = isAnimating ? colors[Math.floor(diceAngle * 5) % 4] : '#22d3ee'; // Flash colors or solid cyan
+            const h = size * (Math.sqrt(3)/2);
+            ctx.moveTo(0, -h);
+            ctx.lineTo(size, h);
+            ctx.lineTo(-size, h);
+            ctx.closePath();
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 4;
+            ctx.stroke();
+            
+            // Inner details
+            ctx.fillStyle = 'rgba(0,0,0,0.2)';
+            ctx.font = 'bold 60px Orbitron';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            if (!isAnimating) {
+                // Show result if stopped
+                // Actually result is shown in overlay, keep dice abstract
+                ctx.fillText("D4", 0, size/2);
+            } else {
+                 ctx.fillText("?", 0, size/2);
+            }
+            
+            ctx.restore();
+        }
+
+        // ----------------------------------------------------------------
+        // Interaction
+        // ----------------------------------------------------------------
+        tapZone.addEventListener('click', () => {
+            if (isAnimating) return;
+            
+            // Reset UI
+            resultDisplay.classList.remove('show');
+            instruction.style.opacity = 0;
+            
+            // Start Physics
+            isAnimating = true;
+            if (mode === 'spinner') {
+                velocity = 0.2 + Math.random() * 0.3; // Random initial speed
+            } else {
+                velocity = 0.3 + Math.random() * 0.2;
+                diceScale = 1;
+            }
+            
+            // Haptic
+            if (navigator.vibrate) navigator.vibrate(50);
+        });
+        
+        function showResult(val) {
+            resultValue.textContent = val;
+            // Set color based on value
+            resultValue.style.color = colors[val-1];
+            resultDisplay.classList.add('show');
+            if (navigator.vibrate) navigator.vibrate([50, 50, 100]);
+        }
+        
+        // Mode Switcher
+        document.getElementById('mode-spinner').addEventListener('click', (e) => {
+            setMode('spinner', e.target);
+        });
+        document.getElementById('mode-dice').addEventListener('click', (e) => {
+            setMode('dice', e.target);
+        });
+        
+        function setMode(newMode, btn) {
+            mode = newMode;
+            document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            
+            // Reset
+            isAnimating = false;
+            resultDisplay.classList.remove('show');
+            instruction.textContent = mode === 'spinner' ? "TAP TO SPIN" : "TAP TO ROLL";
+            instruction.style.opacity = 1;
+            
+            if (mode === 'dice') {
+                diceAngle = 0;
+            }
+        }
+
+    </script>
+</body>
+</html>
