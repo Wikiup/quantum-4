@@ -91,14 +91,24 @@
         let angle = 0;
         let velocity = 0;
         let friction = 0.985;
-        const sectors = [1, 2, 3, 4]; // 1=Top-Right, 2=Bottom-Right, 3=Bottom-Left, 4=Top-Left (Clockwise from top?)
-        // Let's map angles properly. 0 is Right. 
-        // 0-90: 1, 90-180: 2, 180-270: 3, 270-360: 4
         const colors = ['#ef4444', '#3b82f6', '#22c55e', '#f59e0b']; // Red, Blue, Green, Yellow
 
-        // Dice State (Pseudo-3D Tetrahedron)
-        let diceAngle = 0;
-        let diceScale = 1;
+        // Dice State (3D Tetrahedron)
+        let rotation = { x: 0, y: 0, z: 0 };
+        let rotationSpeed = { x: 0, y: 0, z: 0 };
+        const size = 150;
+        const vertices = [
+            { x: size, y: size, z: size },
+            { x: -size, y: -size, z: size },
+            { x: -size, y: size, z: -size },
+            { x: size, y: -size, z: -size }
+        ];
+        const faces = [
+            { v: [0, 1, 2], n: 1, color: '#ef4444' },
+            { v: [0, 1, 3], n: 2, color: '#3b82f6' },
+            { v: [1, 2, 3], n: 3, color: '#22c55e' },
+            { v: [2, 0, 3], n: 4, color: '#f59e0b' }
+        ];
         
         function resize() {
             width = canvas.width = window.innerWidth;
@@ -129,12 +139,9 @@
         // Spinner Logic
         // ----------------------------------------------------------------
         function drawSpinner() {
-            // Physics
             if (isAnimating) {
                 angle += velocity;
                 velocity *= friction;
-                
-                // Stop condition
                 if (Math.abs(velocity) < 0.002) {
                     velocity = 0;
                     isAnimating = false;
@@ -144,14 +151,11 @@
                 }
             }
 
-            // Draw Wheel
             const radius = Math.min(width, height) * 0.35;
-            
             ctx.save();
             ctx.translate(centerX, centerY);
             ctx.rotate(angle);
 
-            // Sectors
             const arc = (Math.PI * 2) / 4;
             for (let i = 0; i < 4; i++) {
                 ctx.beginPath();
@@ -160,11 +164,10 @@
                 ctx.arc(0, 0, radius, i * arc, (i + 1) * arc);
                 ctx.fill();
                 
-                // Labels
                 ctx.save();
                 ctx.rotate(i * arc + arc / 2);
                 ctx.translate(radius * 0.6, 0);
-                ctx.rotate(Math.PI / 2); // Orient text
+                ctx.rotate(Math.PI / 2);
                 ctx.fillStyle = 'rgba(0,0,0,0.5)';
                 ctx.font = 'bold 40px Orbitron';
                 ctx.textAlign = 'center';
@@ -174,15 +177,17 @@
             }
             ctx.restore();
 
-            // Draw Pointer (Fixed at top)
+            // Pointer (Fixed at top, Pointing Down)
             ctx.beginPath();
             ctx.fillStyle = '#fff';
-            ctx.moveTo(centerX, centerY - radius - 20);
-            ctx.lineTo(centerX - 15, centerY - radius + 10);
-            ctx.lineTo(centerX + 15, centerY - radius + 10);
+            // Tip at bottom (radius - overlap)
+            ctx.moveTo(centerX, centerY - radius + 15);
+            // Top corners
+            ctx.lineTo(centerX - 15, centerY - radius - 20);
+            ctx.lineTo(centerX + 15, centerY - radius - 20);
             ctx.fill();
             
-            // Draw Center Cap
+            // Center Cap
             ctx.beginPath();
             ctx.fillStyle = '#111';
             ctx.arc(centerX, centerY, 20, 0, Math.PI * 2);
@@ -190,121 +195,118 @@
         }
 
         function getSpinnerResult() {
-            // Pointer is at -90 deg (Top) relative to center.
-            // Wheel rotation `angle` shifts the sectors.
-            // We need to normalize angle to 0-2PI
-            let normAngle = angle % (Math.PI * 2);
-            if (normAngle < 0) normAngle += Math.PI * 2;
-            
-            // The pointer is at 270 degrees (3*PI/2) in canvas space (0 is right).
-            // Or simpler: Transform pointer angle into wheel space.
-            // Wheel rotates CW. Pointer is static.
-            // Effectively, we check which sector is at -PI/2.
-            
-            // Let's just use raw math.
-            // Total rotation: angle.
-            // Pointer is at -PI/2 (top).
-            // Relative angle = (-PI/2 - angle) normalized.
-            
             let rel = (-Math.PI / 2 - angle) % (Math.PI * 2);
             if (rel < 0) rel += Math.PI * 2;
-            
             const quadrant = Math.floor(rel / (Math.PI / 2));
-            // Quadrant 0 = Sector 1 (1)
-            // Quadrant 1 = Sector 2 (2)
-            // Quadrant 2 = Sector 3 (3)
-            // Quadrant 3 = Sector 4 (4)
             return quadrant + 1;
         }
 
         // ----------------------------------------------------------------
-        // Dice Logic (2D Simulation of 3D)
+        // 3D Dice Logic
         // ----------------------------------------------------------------
+        function project(p, rot) {
+            let x = p.x, y = p.y, z = p.z;
+            // Rotate X
+            let y1 = y * Math.cos(rot.x) - z * Math.sin(rot.x);
+            let z1 = y * Math.sin(rot.x) + z * Math.cos(rot.x);
+            y = y1; z = z1;
+            // Rotate Y
+            let x1 = x * Math.cos(rot.y) - z * Math.sin(rot.y);
+            z1 = x * Math.sin(rot.y) + z * Math.cos(rot.y);
+            x = x1; z = z1;
+            // Rotate Z
+            let x2 = x * Math.cos(rot.z) - y * Math.sin(rot.z);
+            let y2 = x * Math.sin(rot.z) + y * Math.cos(rot.z);
+            x = x2; y = y2;
+            // Perspective
+            const scale = 800 / (800 + z);
+            return { x: x * scale + centerX, y: y * scale + centerY, z: z, scale: scale };
+        }
+
         function drawDice() {
-             if (isAnimating) {
-                // Tumble
-                diceAngle += velocity;
-                // Scale pulse for "3D" effect
-                diceScale = 1 + Math.sin(diceAngle * 3) * 0.2;
-                
-                velocity *= friction; // reuse spinner friction logic
-                
-                if (Math.abs(velocity) < 0.01) {
+            if (isAnimating) {
+                rotationSpeed.x += (Math.random() - 0.5) * 0.1;
+                rotationSpeed.y += (Math.random() - 0.5) * 0.1;
+                rotation.x += rotationSpeed.x;
+                rotation.y += rotationSpeed.y;
+                velocity *= friction;
+                rotationSpeed.x *= 0.98;
+                rotationSpeed.y *= 0.98;
+
+                if (Math.abs(velocity) < 0.005) {
                     velocity = 0;
                     isAnimating = false;
-                    showResult(Math.floor(Math.random() * 4) + 1); // True random for dice
+                    const result = Math.floor(Math.random() * 4) + 1;
+                    showResult(result);
                     instruction.style.opacity = 1;
                     instruction.textContent = "TAP TO ROLL AGAIN";
                 }
-            }
-            
-            const size = Math.min(width, height) * 0.2 * diceScale;
-            
-            ctx.save();
-            ctx.translate(centerX, centerY);
-            ctx.rotate(diceAngle);
-            
-            // Draw Triangle (Tetrahedron face)
-            ctx.beginPath();
-            ctx.fillStyle = isAnimating ? colors[Math.floor(diceAngle * 5) % 4] : '#22d3ee'; // Flash colors or solid cyan
-            const h = size * (Math.sqrt(3)/2);
-            ctx.moveTo(0, -h);
-            ctx.lineTo(size, h);
-            ctx.lineTo(-size, h);
-            ctx.closePath();
-            ctx.fill();
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 4;
-            ctx.stroke();
-            
-            // Inner details
-            ctx.fillStyle = 'rgba(0,0,0,0.2)';
-            ctx.font = 'bold 60px Orbitron';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            if (!isAnimating) {
-                // Show result if stopped
-                // Actually result is shown in overlay, keep dice abstract
-                ctx.fillText("D4", 0, size/2);
             } else {
-                 ctx.fillText("?", 0, size/2);
+                rotation.x += 0.005;
+                rotation.y += 0.01;
             }
-            
-            ctx.restore();
+
+            const projectedFaces = faces.map(face => {
+                const p1 = project(vertices[face.v[0]], rotation);
+                const p2 = project(vertices[face.v[1]], rotation);
+                const p3 = project(vertices[face.v[2]], rotation);
+                const z = (p1.z + p2.z + p3.z) / 3;
+                return { points: [p1, p2, p3], z, color: face.color, n: face.n };
+            }).sort((a, b) => b.z - a.z);
+
+            projectedFaces.forEach(f => {
+                ctx.beginPath();
+                ctx.moveTo(f.points[0].x, f.points[0].y);
+                ctx.lineTo(f.points[1].x, f.points[1].y);
+                ctx.lineTo(f.points[2].x, f.points[2].y);
+                ctx.closePath();
+                
+                ctx.fillStyle = f.color;
+                ctx.fill();
+                ctx.strokeStyle = `rgba(255,255,255,0.2)`;
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                const cx = (f.points[0].x + f.points[1].x + f.points[2].x) / 3;
+                const cy = (f.points[0].y + f.points[1].y + f.points[2].y) / 3;
+                ctx.fillStyle = 'rgba(255,255,255,0.9)';
+                ctx.font = `bold ${40 * f.points[0].scale}px Orbitron`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(f.n, cx, cy);
+            });
         }
 
         // ----------------------------------------------------------------
         // Interaction
         // ----------------------------------------------------------------
         tapZone.addEventListener('click', () => {
-            if (isAnimating) return;
-            
-            // Reset UI
+            if (navigator.vibrate) navigator.vibrate(50);
+
+            if (isAnimating) {
+                // Turbo Boost: Add speed on tap
+                velocity += 0.2;
+                return;
+            }
+
             resultDisplay.classList.remove('show');
             instruction.style.opacity = 0;
-            
-            // Start Physics
             isAnimating = true;
             if (mode === 'spinner') {
-                velocity = 0.2 + Math.random() * 0.3; // Random initial speed
+                velocity = 0.2 + Math.random() * 0.3;
             } else {
                 velocity = 0.3 + Math.random() * 0.2;
-                diceScale = 1;
             }
-            
-            // Haptic
             if (navigator.vibrate) navigator.vibrate(50);
         });
         
         function showResult(val) {
             resultValue.textContent = val;
-            // Set color based on value
             resultValue.style.color = colors[val-1];
             resultDisplay.classList.add('show');
             if (navigator.vibrate) navigator.vibrate([50, 50, 100]);
         }
         
-        // Mode Switcher
         document.getElementById('mode-spinner').addEventListener('click', (e) => {
             setMode('spinner', e.target);
         });
@@ -316,18 +318,11 @@
             mode = newMode;
             document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            
-            // Reset
             isAnimating = false;
             resultDisplay.classList.remove('show');
             instruction.textContent = mode === 'spinner' ? "TAP TO SPIN" : "TAP TO ROLL";
             instruction.style.opacity = 1;
-            
-            if (mode === 'dice') {
-                diceAngle = 0;
-            }
         }
-
     </script>
 </body>
 </html>
